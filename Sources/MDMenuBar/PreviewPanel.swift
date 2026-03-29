@@ -6,9 +6,12 @@ class PreviewPanel: NSPanel {
     private var webView: WKWebView!
     private var titleBar: NSView!
     private var fileLabel: NSTextField!
+    private var handle: ResizeHandle!
     private var watchSource: DispatchSourceFileSystemObject?
     private var currentFilePath: String?
     private var globalClickMonitor: Any?
+    private var globalMoveMonitor: Any?
+    private var cursorPushed = false
 
     private static let minWidth: CGFloat = 300
     private static let maxWidth: CGFloat = 1200
@@ -137,7 +140,7 @@ class PreviewPanel: NSPanel {
         // Resize handle on the left edge — added before other views so we can
         // constrain scrollBg's leading edge to it, keeping WKWebView from
         // overlapping the strip (WKWebView resets the cursor over its own area).
-        let handle = ResizeHandle()
+        handle = ResizeHandle()
         handle.translatesAutoresizingMaskIntoConstraints = false
         handle.onDrag = { [weak self] delta in self?.resizeByDelta(delta) }
 
@@ -219,12 +222,41 @@ class PreviewPanel: NSPanel {
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             self?.hidePanel()
         }
+
+        // Monitor mouse movement to show resize cursor over the left-edge handle.
+        // NSTrackingArea is unreliable for apps with .accessory activation policy
+        // (the app never "activates", so tracking areas may not fire). A global
+        // monitor works regardless of activation state.
+        globalMoveMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
+            self?.updateHandleCursor()
+        }
+    }
+
+    private func updateHandleCursor() {
+        let mouse = NSEvent.mouseLocation
+        let handleScreenFrame = convertToScreen(handle.convert(handle.bounds, to: nil))
+        let over = handleScreenFrame.contains(mouse)
+        if over && !cursorPushed {
+            NSCursor.resizeLeftRight.push()
+            cursorPushed = true
+        } else if !over && cursorPushed {
+            NSCursor.pop()
+            cursorPushed = false
+        }
     }
 
     @objc func hidePanel() {
         if let monitor = globalClickMonitor {
             NSEvent.removeMonitor(monitor)
             globalClickMonitor = nil
+        }
+        if let monitor = globalMoveMonitor {
+            NSEvent.removeMonitor(monitor)
+            globalMoveMonitor = nil
+        }
+        if cursorPushed {
+            NSCursor.pop()
+            cursorPushed = false
         }
 
         // Slide back out to the right edge of whichever screen the panel is currently on
@@ -409,31 +441,13 @@ extension PreviewPanel {
 
 // MARK: - ResizeHandle
 
-/// A thin invisible view on the left edge of the panel.
-/// Drag it left/right to resize the panel width.
+/// A thin view on the left edge of the panel that handles drag-to-resize.
+/// Cursor management is handled by PreviewPanel via a global event monitor,
+/// since NSTrackingArea is unreliable for .accessory activation policy apps.
 private class ResizeHandle: NSView {
 
     var onDrag: ((CGFloat) -> Void)?
     private var dragStartX: CGFloat = 0
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        trackingAreas.forEach { removeTrackingArea($0) }
-        addTrackingArea(NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        ))
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        NSCursor.resizeLeftRight.push()
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        NSCursor.pop()
-    }
 
     override func mouseDown(with event: NSEvent) {
         dragStartX = convert(event.locationInWindow, from: nil).x
