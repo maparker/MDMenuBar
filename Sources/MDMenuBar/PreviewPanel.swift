@@ -310,8 +310,14 @@ extension PreviewPanel: WKNavigationDelegate {
             return
         }
 
-        // Local file links (relative paths in the markdown) stay in the view
+        // Local .md/.markdown links open in the default editor
         if url.isFileURL {
+            let ext = url.pathExtension.lowercased()
+            if ext == "md" || ext == "markdown" {
+                NSWorkspace.shared.open(url)
+                decisionHandler(.cancel)
+                return
+            }
             decisionHandler(.allow)
             return
         }
