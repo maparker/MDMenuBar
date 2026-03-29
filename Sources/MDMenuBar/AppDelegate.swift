@@ -70,11 +70,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showContextMenu() {
         let menu = NSMenu()
-        menu.addItem(withTitle: "Open File…",    action: #selector(openFile),     keyEquivalent: "o")
-        menu.addItem(withTitle: "Reload",        action: #selector(reloadFile),   keyEquivalent: "r")
+        menu.addItem(withTitle: "Open File…", action: #selector(openFile),   keyEquivalent: "o").target = self
+        menu.addItem(withTitle: "Reload",     action: #selector(reloadFile), keyEquivalent: "r").target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit",          action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        menu.items.forEach { $0.target = self }
+        menu.addItem(withTitle: "Quit",       action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q").target = NSApp
         statusItem.menu = menu
         statusItem.button?.performClick(nil)
         statusItem.menu = nil  // Remove so left-click still toggles
