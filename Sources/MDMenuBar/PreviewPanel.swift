@@ -121,7 +121,7 @@ class PreviewPanel: NSPanel {
 
                 document.addEventListener('mousemove', function(e) {
                     var inHandle = e.clientX < 12;
-                    document.documentElement.style.cursor = inHandle ? 'col-resize' : '';
+                    document.documentElement.style.cursor = inHandle ? 'ew-resize' : '';
                     if (dragging)
                         window.webkit.messageHandlers.resizeDrag.postMessage(e.movementX);
                 });
