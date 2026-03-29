@@ -134,33 +134,47 @@ class PreviewPanel: NSPanel {
             webView.trailingAnchor.constraint(equalTo: scrollBg.trailingAnchor),
         ])
 
-        root.addSubview(bar)
-        root.addSubview(sep)
-        root.addSubview(scrollBg)
-        bar.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            bar.topAnchor.constraint(equalTo: root.topAnchor),
-            bar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            bar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            sep.topAnchor.constraint(equalTo: bar.bottomAnchor),
-            sep.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            sep.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-            scrollBg.topAnchor.constraint(equalTo: sep.bottomAnchor),
-            scrollBg.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            scrollBg.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            scrollBg.trailingAnchor.constraint(equalTo: root.trailingAnchor),
-        ])
-
-        // Resize handle on the left edge
+        // Resize handle on the left edge — added before other views so we can
+        // constrain scrollBg's leading edge to it, keeping WKWebView from
+        // overlapping the strip (WKWebView resets the cursor over its own area).
         let handle = ResizeHandle()
         handle.translatesAutoresizingMaskIntoConstraints = false
         handle.onDrag = { [weak self] delta in self?.resizeByDelta(delta) }
-        root.addSubview(handle)
+
+        // Background strip behind the handle so the left edge isn't transparent
+        let handleBg = NSVisualEffectView()
+        handleBg.material = .sidebar
+        handleBg.blendingMode = .behindWindow
+        handleBg.state = .active
+        handleBg.translatesAutoresizingMaskIntoConstraints = false
+
+        root.addSubview(handleBg)
+        root.addSubview(bar)
+        root.addSubview(sep)
+        root.addSubview(scrollBg)
+        root.addSubview(handle)   // on top so it receives mouse events
+        bar.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
+            // Handle and its background strip occupy the left 6pt
+            handleBg.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            handleBg.topAnchor.constraint(equalTo: root.topAnchor),
+            handleBg.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            handleBg.widthAnchor.constraint(equalToConstant: 6),
             handle.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             handle.topAnchor.constraint(equalTo: root.topAnchor),
             handle.bottomAnchor.constraint(equalTo: root.bottomAnchor),
             handle.widthAnchor.constraint(equalToConstant: 6),
+            // All content starts at the handle's trailing edge
+            bar.topAnchor.constraint(equalTo: root.topAnchor),
+            bar.leadingAnchor.constraint(equalTo: handle.trailingAnchor),
+            bar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            sep.topAnchor.constraint(equalTo: bar.bottomAnchor),
+            sep.leadingAnchor.constraint(equalTo: handle.trailingAnchor),
+            sep.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            scrollBg.topAnchor.constraint(equalTo: sep.bottomAnchor),
+            scrollBg.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            scrollBg.leadingAnchor.constraint(equalTo: handle.trailingAnchor),
+            scrollBg.trailingAnchor.constraint(equalTo: root.trailingAnchor),
         ])
 
         contentView = root
