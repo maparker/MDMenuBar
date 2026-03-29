@@ -9,12 +9,12 @@ class PreviewPanel: NSPanel {
     private var watchSource: DispatchSourceFileSystemObject?
     private var currentFilePath: String?
     private var globalClickMonitor: Any?
-    private var edgePanel: EdgeHandlePanel!
 
     private static let minWidth: CGFloat = 300
     private static let maxWidth: CGFloat = 1200
     private static let defaultWidth: CGFloat = 520
     private static let widthKey = "previewPanelWidth"
+    private static let handleWidth: CGFloat = 8
 
     private var panelWidth: CGFloat {
         get {
@@ -29,8 +29,6 @@ class PreviewPanel: NSPanel {
     override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
         configure()
-        edgePanel = EdgeHandlePanel()
-        edgePanel.onDrag = { [weak self] delta in self?.resizeByDelta(delta) }
     }
 
     // MARK: - Setup
@@ -125,6 +123,24 @@ class PreviewPanel: NSPanel {
         webView.setValue(false, forKey: "drawsBackground") // transparent bg, CSS handles it
         webView.navigationDelegate = self
 
+        // Resize handle — an 8pt strip at the left edge that contains NO WKWebView.
+        // WKWebView's WebContent process sets cursor at the IOKit level for every
+        // screen coordinate inside the WKWebView frame, overriding all AppKit
+        // NSCursor calls from the main process.  By keeping the WKWebView frame
+        // 8pt away from the panel's left edge, the WebContent process has no
+        // authority over those pixels and normal AppKit cursor handling applies.
+        let handle = ResizeHandleView()
+        handle.onDrag = { [weak self] delta in self?.resizeByDelta(delta) }
+        handle.translatesAutoresizingMaskIntoConstraints = false
+
+        // Background behind the handle strip — same material as the content area
+        // so the seam is invisible.
+        let handleBg = NSVisualEffectView()
+        handleBg.material = .contentBackground
+        handleBg.blendingMode = .behindWindow
+        handleBg.state = .active
+        handleBg.translatesAutoresizingMaskIntoConstraints = false
+
         let scrollBg = NSVisualEffectView()
         scrollBg.material = .contentBackground
         scrollBg.blendingMode = .behindWindow
@@ -140,18 +156,34 @@ class PreviewPanel: NSPanel {
 
         root.addSubview(bar)
         root.addSubview(sep)
+        root.addSubview(handleBg)
         root.addSubview(scrollBg)
+        root.addSubview(handle)   // on top so it receives mouse events
         bar.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             bar.topAnchor.constraint(equalTo: root.topAnchor),
             bar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             bar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+
             sep.topAnchor.constraint(equalTo: bar.bottomAnchor),
             sep.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             sep.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+
+            // Handle strip: 8pt wide, full height below separator
+            handleBg.topAnchor.constraint(equalTo: sep.bottomAnchor),
+            handleBg.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            handleBg.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            handleBg.widthAnchor.constraint(equalToConstant: Self.handleWidth),
+
+            handle.topAnchor.constraint(equalTo: sep.bottomAnchor),
+            handle.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            handle.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            handle.widthAnchor.constraint(equalToConstant: Self.handleWidth),
+
+            // WebView area starts after the handle strip
             scrollBg.topAnchor.constraint(equalTo: sep.bottomAnchor),
             scrollBg.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            scrollBg.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            scrollBg.leadingAnchor.constraint(equalTo: handleBg.trailingAnchor),
             scrollBg.trailingAnchor.constraint(equalTo: root.trailingAnchor),
         ])
 
@@ -191,8 +223,6 @@ class PreviewPanel: NSPanel {
             ctx.duration = 0.28
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             animator().setFrame(NSRect(x: sf.maxX - w, y: sf.minY, width: w, height: h), display: true)
-        } completionHandler: { [weak self] in
-            self?.showEdgePanel()
         }
 
         // Monitor clicks outside panel to auto-hide
@@ -201,14 +231,7 @@ class PreviewPanel: NSPanel {
         }
     }
 
-    private func showEdgePanel() {
-        edgePanel.setFrame(NSRect(x: frame.minX, y: frame.minY, width: 8, height: frame.height), display: false)
-        edgePanel.order(.above, relativeTo: windowNumber)
-    }
-
     @objc func hidePanel() {
-        edgePanel.orderOut(nil)
-
         if let monitor = globalClickMonitor {
             NSEvent.removeMonitor(monitor)
             globalClickMonitor = nil
@@ -334,7 +357,6 @@ class PreviewPanel: NSPanel {
         let newX = screen.visibleFrame.maxX - newWidth
         setFrame(NSRect(x: newX, y: frame.minY, width: newWidth, height: frame.height), display: true)
         panelWidth = newWidth
-        showEdgePanel()
     }
 
     // MARK: - Keyboard
@@ -366,7 +388,6 @@ extension PreviewPanel: WKNavigationDelegate {
         routeURL(url)
         decisionHandler(.cancel)
     }
-
 }
 
 // MARK: - WKScriptMessageHandler
@@ -400,36 +421,18 @@ extension PreviewPanel {
     }
 }
 
-
-// MARK: - EdgeHandlePanel
+// MARK: - ResizeHandleView
 //
-// A tiny transparent NSPanel that sits at the left edge of PreviewPanel.
-// Because it contains no WKWebView, AppKit cursor APIs work normally here —
-// NSCursor is not overridden by the WebContent process.
+// Occupies the 8pt strip at the panel's left edge that contains NO WKWebView.
+// WKWebView's WebContent process manages cursor at the IOKit level for every
+// screen coordinate inside the WKWebView frame — so AppKit NSCursor calls are
+// ineffective anywhere the WKWebView frame covers.  This view lives outside
+// that frame, so normal AppKit cursor behaviour applies.
 
-class EdgeHandlePanel: NSPanel {
+private class ResizeHandleView: NSView {
     var onDrag: ((CGFloat) -> Void)?
 
-    init() {
-        super.init(contentRect: .zero,
-                   styleMask: [.borderless, .nonactivatingPanel],
-                   backing: .buffered,
-                   defer: false)
-        level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
-        backgroundColor = .clear
-        isOpaque = false
-        hasShadow = false
-        ignoresMouseEvents = false
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-
-        let view = EdgeHandleView()
-        view.onDrag = { [weak self] delta in self?.onDrag?(delta) }
-        contentView = view
-    }
-}
-
-private class EdgeHandleView: NSView {
-    var onDrag: ((CGFloat) -> Void)?
+    override var acceptsFirstResponder: Bool { true }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
