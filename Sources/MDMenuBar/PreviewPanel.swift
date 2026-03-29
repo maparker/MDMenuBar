@@ -6,7 +6,6 @@ class PreviewPanel: NSPanel {
     private var webView: WKWebView!
     private var titleBar: NSView!
     private var fileLabel: NSTextField!
-    private var handle: ResizeHandle!
     private var watchSource: DispatchSourceFileSystemObject?
     private var currentFilePath: String?
     private var globalClickMonitor: Any?
@@ -41,8 +40,6 @@ class PreviewPanel: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
-        acceptsMouseMovedEvents = true  // required for sendEvent to receive .mouseMoved
-
         buildContentView()
     }
 
@@ -103,20 +100,44 @@ class PreviewPanel: NSPanel {
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
 
-        // Intercept all link clicks in JS — more reliable than WKNavigationDelegate
-        // for file:// URLs, which WKWebView can block before the delegate fires.
-        let linkScript = WKUserScript(source: """
-            document.addEventListener('click', function(e) {
-                var el = e.target;
-                while (el && el.tagName !== 'A') { el = el.parentElement; }
-                if (el && el.href) {
-                    e.preventDefault();
-                    window.webkit.messageHandlers.linkClicked.postMessage(el.href);
-                }
-            }, true);
+        // Combined script: link-click interception + left-edge resize handle.
+        //
+        // NSCursor API is ineffective here — WKWebView's rendering process owns
+        // cursor state for the whole window and continuously overrides any AppKit
+        // cursor calls. Injecting the handle as a DOM element lets WKWebView manage
+        // the cursor itself via CSS, which works reliably.
+        //
+        // The 6px fixed overlay at left:0 shows ew-resize cursor on hover and
+        // posts movementX deltas (CSS px ≈ AppKit pts) to Swift on drag.
+        let pageScript = WKUserScript(source: """
+            (function() {
+                // Resize handle overlay
+                var rh = document.createElement('div');
+                rh.style.cssText = 'position:fixed;left:0;top:0;width:6px;height:100vh;cursor:ew-resize;z-index:2147483647;user-select:none;';
+                document.documentElement.appendChild(rh);
+                var dragging = false;
+                rh.addEventListener('mousedown', function(e) {
+                    dragging = true; e.preventDefault(); e.stopPropagation();
+                });
+                document.addEventListener('mousemove', function(e) {
+                    if (dragging) window.webkit.messageHandlers.resizeDrag.postMessage(e.movementX);
+                });
+                document.addEventListener('mouseup', function() { dragging = false; });
+
+                // Link-click interception
+                document.addEventListener('click', function(e) {
+                    var el = e.target;
+                    while (el && el.tagName !== 'A') { el = el.parentElement; }
+                    if (el && el.href) {
+                        e.preventDefault();
+                        window.webkit.messageHandlers.linkClicked.postMessage(el.href);
+                    }
+                }, true);
+            })();
             """, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
-        config.userContentController.addUserScript(linkScript)
+        config.userContentController.addUserScript(pageScript)
         config.userContentController.add(self, name: "linkClicked")
+        config.userContentController.add(self, name: "resizeDrag")
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.translatesAutoresizingMaskIntoConstraints = false
@@ -136,46 +157,20 @@ class PreviewPanel: NSPanel {
             webView.trailingAnchor.constraint(equalTo: scrollBg.trailingAnchor),
         ])
 
-        // Resize handle on the left edge — added before other views so we can
-        // constrain scrollBg's leading edge to it, keeping WKWebView from
-        // overlapping the strip (WKWebView resets the cursor over its own area).
-        handle = ResizeHandle()
-        handle.translatesAutoresizingMaskIntoConstraints = false
-        handle.onDrag = { [weak self] delta in self?.resizeByDelta(delta) }
-
-        // Background strip behind the handle so the left edge isn't transparent
-        let handleBg = NSVisualEffectView()
-        handleBg.material = .sidebar
-        handleBg.blendingMode = .behindWindow
-        handleBg.state = .active
-        handleBg.translatesAutoresizingMaskIntoConstraints = false
-
-        root.addSubview(handleBg)
         root.addSubview(bar)
         root.addSubview(sep)
         root.addSubview(scrollBg)
-        root.addSubview(handle)   // on top so it receives mouse events
         bar.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            // Handle and its background strip occupy the left 6pt
-            handleBg.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            handleBg.topAnchor.constraint(equalTo: root.topAnchor),
-            handleBg.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            handleBg.widthAnchor.constraint(equalToConstant: 6),
-            handle.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            handle.topAnchor.constraint(equalTo: root.topAnchor),
-            handle.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            handle.widthAnchor.constraint(equalToConstant: 6),
-            // All content starts at the handle's trailing edge
             bar.topAnchor.constraint(equalTo: root.topAnchor),
-            bar.leadingAnchor.constraint(equalTo: handle.trailingAnchor),
+            bar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             bar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             sep.topAnchor.constraint(equalTo: bar.bottomAnchor),
-            sep.leadingAnchor.constraint(equalTo: handle.trailingAnchor),
+            sep.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             sep.trailingAnchor.constraint(equalTo: root.trailingAnchor),
             scrollBg.topAnchor.constraint(equalTo: sep.bottomAnchor),
             scrollBg.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            scrollBg.leadingAnchor.constraint(equalTo: handle.trailingAnchor),
+            scrollBg.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             scrollBg.trailingAnchor.constraint(equalTo: root.trailingAnchor),
         ])
 
@@ -224,30 +219,11 @@ class PreviewPanel: NSPanel {
 
     }
 
-    // sendEvent() receives every event dispatched to the window — the same path
-    // that delivers mouseDown/mouseDragged to the resize handle. Using it here
-    // avoids all the uncertainty around tracking areas, local monitors, and
-    // whether .accessory-policy apps receive mouseMoved through other channels.
-    override func sendEvent(_ event: NSEvent) {
-        if event.type == .mouseMoved {
-            // handle.frame is in the contentView (root) coordinate system,
-            // which equals the window base coordinate system.
-            // event.locationInWindow is also in window base coordinates.
-            if handle.frame.contains(event.locationInWindow) {
-                NSCursor.resizeLeftRight.set()
-            } else {
-                NSCursor.arrow.set()
-            }
-        }
-        super.sendEvent(event)
-    }
-
     @objc func hidePanel() {
         if let monitor = globalClickMonitor {
             NSEvent.removeMonitor(monitor)
             globalClickMonitor = nil
         }
-        NSCursor.arrow.set()
 
         // Slide back out to the right edge of whichever screen the panel is currently on
         guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(frame) }) ?? NSScreen.main else {
@@ -406,10 +382,18 @@ extension PreviewPanel: WKNavigationDelegate {
 
 extension PreviewPanel: WKScriptMessageHandler {
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "linkClicked",
-              let urlString = message.body as? String,
-              let url = URL(string: urlString) else { return }
-        routeURL(url)
+        switch message.name {
+        case "linkClicked":
+            guard let urlString = message.body as? String,
+                  let url = URL(string: urlString) else { return }
+            routeURL(url)
+        case "resizeDrag":
+            // movementX is in CSS pixels, which equal AppKit points on macOS
+            guard let delta = message.body as? Double else { return }
+            resizeByDelta(CGFloat(delta))
+        default:
+            break
+        }
     }
 }
 
@@ -429,28 +413,6 @@ extension PreviewPanel {
     }
 }
 
-// MARK: - ResizeHandle
-
-/// A thin view on the left edge of the panel that handles drag-to-resize.
-/// Cursor management is handled by PreviewPanel via a global event monitor,
-/// since NSTrackingArea is unreliable for .accessory activation policy apps.
-private class ResizeHandle: NSView {
-
-    var onDrag: ((CGFloat) -> Void)?
-    private var dragStartX: CGFloat = 0
-
-    override func mouseDown(with event: NSEvent) {
-        NSCursor.resizeLeftRight.set()
-        dragStartX = convert(event.locationInWindow, from: nil).x
-    }
-
-    override func mouseDragged(with event: NSEvent) {
-        NSCursor.resizeLeftRight.set()
-        let currentX = convert(event.locationInWindow, from: nil).x
-        onDrag?(currentX - dragStartX)
-        dragStartX = currentX
-    }
-}
 
 // MARK: - Helpers
 
