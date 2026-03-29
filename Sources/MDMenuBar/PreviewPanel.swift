@@ -10,8 +10,20 @@ class PreviewPanel: NSPanel {
     private var currentFilePath: String?
     private var globalClickMonitor: Any?
 
-    // Slide-in from the right side of the screen
-    private static let panelWidth: CGFloat = 520
+    private static let minWidth: CGFloat = 300
+    private static let maxWidth: CGFloat = 1200
+    private static let defaultWidth: CGFloat = 520
+    private static let widthKey = "previewPanelWidth"
+
+    private var panelWidth: CGFloat {
+        get {
+            let stored = UserDefaults.standard.double(forKey: Self.widthKey)
+            return stored > 0 ? stored : Self.defaultWidth
+        }
+        set {
+            UserDefaults.standard.set(newValue, forKey: Self.widthKey)
+        }
+    }
 
     override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
@@ -139,6 +151,18 @@ class PreviewPanel: NSPanel {
             scrollBg.trailingAnchor.constraint(equalTo: root.trailingAnchor),
         ])
 
+        // Resize handle on the left edge
+        let handle = ResizeHandle()
+        handle.translatesAutoresizingMaskIntoConstraints = false
+        handle.onDrag = { [weak self] delta in self?.resizeByDelta(delta) }
+        root.addSubview(handle)
+        NSLayoutConstraint.activate([
+            handle.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            handle.topAnchor.constraint(equalTo: root.topAnchor),
+            handle.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            handle.widthAnchor.constraint(equalToConstant: 6),
+        ])
+
         contentView = root
         titleBar = bar
     }
@@ -164,7 +188,7 @@ class PreviewPanel: NSPanel {
         // falling back to the screen with the menu bar, then any available screen.
         guard let screen = screen ?? NSScreen.main ?? NSScreen.screens.first else { return }
         let sf = screen.visibleFrame
-        let w = Self.panelWidth
+        let w = min(panelWidth, sf.width * 0.9)
         let h = sf.height
 
         // Start off-screen to the right
@@ -301,6 +325,16 @@ class PreviewPanel: NSPanel {
         }
     }
 
+    // MARK: - Resize
+
+    private func resizeByDelta(_ delta: CGFloat) {
+        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(frame) }) ?? NSScreen.main else { return }
+        let newWidth = (frame.width - delta).clamped(to: Self.minWidth...min(Self.maxWidth, screen.visibleFrame.width * 0.9))
+        let newX = screen.visibleFrame.maxX - newWidth
+        setFrame(NSRect(x: newX, y: frame.minY, width: newWidth, height: frame.height), display: true)
+        panelWidth = newWidth
+    }
+
     // MARK: - Keyboard
 
     override func keyDown(with event: NSEvent) {
@@ -356,5 +390,37 @@ extension PreviewPanel {
         } else {
             NSWorkspace.shared.open(url)      // http/https/mailto → default browser
         }
+    }
+}
+
+// MARK: - ResizeHandle
+
+/// A thin invisible view on the left edge of the panel.
+/// Drag it left/right to resize the panel width.
+private class ResizeHandle: NSView {
+
+    var onDrag: ((CGFloat) -> Void)?
+    private var dragStartX: CGFloat = 0
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        dragStartX = convert(event.locationInWindow, from: nil).x
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let currentX = convert(event.locationInWindow, from: nil).x
+        onDrag?(currentX - dragStartX)
+        dragStartX = currentX
+    }
+}
+
+// MARK: - Helpers
+
+private extension Comparable {
+    func clamped(to range: ClosedRange<Self>) -> Self {
+        min(max(self, range.lowerBound), range.upperBound)
     }
 }
