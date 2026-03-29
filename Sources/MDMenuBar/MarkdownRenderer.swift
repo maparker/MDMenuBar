@@ -310,6 +310,20 @@ struct MarkdownRenderer {
         th { background: var(--code-bg); font-weight: 600; }
         tr:nth-child(even) td { background: var(--table-alt); }
         del { color: var(--muted); }
+        /* Drag handle pill — shows where the left edge can be dragged to resize */
+        body::before {
+            content: '';
+            position: fixed;
+            left: 3px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 4px;
+            height: 48px;
+            background: var(--border);
+            border-radius: 2px;
+            pointer-events: none;
+            opacity: 0.7;
+        }
         </style>
         </head>
         <body>
