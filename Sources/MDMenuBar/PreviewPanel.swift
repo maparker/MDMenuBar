@@ -113,16 +113,21 @@ class PreviewPanel: NSPanel {
             (function() {
                 // Resize handle overlay
                 var rh = document.createElement('div');
-                rh.style.cssText = 'position:fixed;left:0;top:0;width:6px;height:100vh;cursor:ew-resize;z-index:2147483647;user-select:none;';
+                rh.style.cssText = 'position:fixed;left:0;top:0;width:8px;height:100vh;cursor:ew-resize;z-index:2147483647;user-select:none;touch-action:none;';
                 document.documentElement.appendChild(rh);
-                var dragging = false;
-                rh.addEventListener('mousedown', function(e) {
-                    dragging = true; e.preventDefault(); e.stopPropagation();
+                // setPointerCapture keeps events coming even when the cursor
+                // leaves the WKWebView bounds during a drag.
+                rh.addEventListener('pointerdown', function(e) {
+                    rh.setPointerCapture(e.pointerId);
+                    e.preventDefault(); e.stopPropagation();
                 });
-                document.addEventListener('mousemove', function(e) {
-                    if (dragging) window.webkit.messageHandlers.resizeDrag.postMessage(e.movementX);
+                rh.addEventListener('pointermove', function(e) {
+                    if (rh.hasPointerCapture(e.pointerId))
+                        window.webkit.messageHandlers.resizeDrag.postMessage(e.movementX);
                 });
-                document.addEventListener('mouseup', function() { dragging = false; });
+                rh.addEventListener('pointerup', function(e) {
+                    rh.releasePointerCapture(e.pointerId);
+                });
 
                 // Link-click interception
                 document.addEventListener('click', function(e) {
