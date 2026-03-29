@@ -9,6 +9,7 @@ class PreviewPanel: NSPanel {
     private var watchSource: DispatchSourceFileSystemObject?
     private var currentFilePath: String?
     private var globalClickMonitor: Any?
+    private var edgePanel: EdgeHandlePanel!
 
     private static let minWidth: CGFloat = 300
     private static let maxWidth: CGFloat = 1200
@@ -28,6 +29,8 @@ class PreviewPanel: NSPanel {
     override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
         super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
         configure()
+        edgePanel = EdgeHandlePanel()
+        edgePanel.onDrag = { [weak self] delta in self?.resizeByDelta(delta) }
     }
 
     // MARK: - Setup
@@ -100,54 +103,10 @@ class PreviewPanel: NSPanel {
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
 
-        // Combined script: link-click interception + left-edge resize handle.
-        //
-        // NSCursor API is ineffective here — WKWebView's rendering process owns
-        // cursor state for the whole window and continuously overrides any AppKit
-        // cursor calls. Injecting the handle as a DOM element lets WKWebView manage
-        // the cursor itself via CSS, which works reliably.
-        //
-        // The 6px fixed overlay at left:0 shows ew-resize cursor on hover and
-        // posts movementX deltas (CSS px ≈ AppKit pts) to Swift on drag.
+        // Intercept link clicks via JS so we can route them through Swift
+        // (WKNavigationDelegate alone misses file:// links due to sandbox).
         let pageScript = WKUserScript(source: """
             (function() {
-                // Resize handle overlay
-                // window.screenX is always 0 in WKWebView (not a real browser window).
-                // Swift sets window.__panelLeft to the panel's actual screen X so
-                // we can compare e.screenX against the true left edge.
-                var resizing = false;
-                var activePtr = null;
-                function nearEdge(e) { return (e.screenX - (window.__panelLeft || 0)) < 8; }
-
-                // Cursor hint
-                document.addEventListener('mousemove', function(e) {
-                    if (!resizing)
-                        document.documentElement.style.cursor = nearEdge(e) ? 'ew-resize' : '';
-                });
-
-                // Start drag — capture phase so we beat other handlers
-                document.addEventListener('pointerdown', function(e) {
-                    if (!nearEdge(e)) return;
-                    resizing = true; activePtr = e.pointerId;
-                    e.target.setPointerCapture(e.pointerId); // keep events outside WKWebView
-                    e.preventDefault();
-                }, true);
-
-                // Drag delta
-                document.addEventListener('pointermove', function(e) {
-                    if (resizing && e.pointerId === activePtr)
-                        window.webkit.messageHandlers.resizeDrag.postMessage(e.movementX);
-                });
-
-                // End drag
-                document.addEventListener('pointerup', function(e) {
-                    if (resizing && e.pointerId === activePtr) {
-                        resizing = false; activePtr = null;
-                        document.documentElement.style.cursor = '';
-                    }
-                });
-
-                // Link-click interception
                 document.addEventListener('click', function(e) {
                     var el = e.target;
                     while (el && el.tagName !== 'A') { el = el.parentElement; }
@@ -160,7 +119,6 @@ class PreviewPanel: NSPanel {
             """, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         config.userContentController.addUserScript(pageScript)
         config.userContentController.add(self, name: "linkClicked")
-        config.userContentController.add(self, name: "resizeDrag")
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.translatesAutoresizingMaskIntoConstraints = false
@@ -233,16 +191,24 @@ class PreviewPanel: NSPanel {
             ctx.duration = 0.28
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             animator().setFrame(NSRect(x: sf.maxX - w, y: sf.minY, width: w, height: h), display: true)
+        } completionHandler: { [weak self] in
+            self?.showEdgePanel()
         }
 
         // Monitor clicks outside panel to auto-hide
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             self?.hidePanel()
         }
+    }
 
+    private func showEdgePanel() {
+        edgePanel.setFrame(NSRect(x: frame.minX, y: frame.minY, width: 8, height: frame.height), display: false)
+        edgePanel.order(.above, relativeTo: windowNumber)
     }
 
     @objc func hidePanel() {
+        edgePanel.orderOut(nil)
+
         if let monitor = globalClickMonitor {
             NSEvent.removeMonitor(monitor)
             globalClickMonitor = nil
@@ -368,12 +334,7 @@ class PreviewPanel: NSPanel {
         let newX = screen.visibleFrame.maxX - newWidth
         setFrame(NSRect(x: newX, y: frame.minY, width: newWidth, height: frame.height), display: true)
         panelWidth = newWidth
-        pushPanelLeftToJS()
-    }
-
-    private func pushPanelLeftToJS() {
-        // window.screenX is always 0 in WKWebView, so we inject the real value.
-        webView.evaluateJavaScript("window.__panelLeft = \(frame.minX);", completionHandler: nil)
+        showEdgePanel()
     }
 
     // MARK: - Keyboard
@@ -406,9 +367,6 @@ extension PreviewPanel: WKNavigationDelegate {
         decisionHandler(.cancel)
     }
 
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        pushPanelLeftToJS()
-    }
 }
 
 // MARK: - WKScriptMessageHandler
@@ -420,10 +378,6 @@ extension PreviewPanel: WKScriptMessageHandler {
             guard let urlString = message.body as? String,
                   let url = URL(string: urlString) else { return }
             routeURL(url)
-        case "resizeDrag":
-            // movementX is in CSS pixels, which equal AppKit points on macOS
-            guard let delta = message.body as? Double else { return }
-            resizeByDelta(CGFloat(delta))
         default:
             break
         }
@@ -446,6 +400,55 @@ extension PreviewPanel {
     }
 }
 
+
+// MARK: - EdgeHandlePanel
+//
+// A tiny transparent NSPanel that sits at the left edge of PreviewPanel.
+// Because it contains no WKWebView, AppKit cursor APIs work normally here —
+// NSCursor is not overridden by the WebContent process.
+
+class EdgeHandlePanel: NSPanel {
+    var onDrag: ((CGFloat) -> Void)?
+
+    init() {
+        super.init(contentRect: .zero,
+                   styleMask: [.borderless, .nonactivatingPanel],
+                   backing: .buffered,
+                   defer: false)
+        level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue + 1)
+        backgroundColor = .clear
+        isOpaque = false
+        hasShadow = false
+        ignoresMouseEvents = false
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+
+        let view = EdgeHandleView()
+        view.onDrag = { [weak self] delta in self?.onDrag?(delta) }
+        contentView = view
+    }
+}
+
+private class EdgeHandleView: NSView {
+    var onDrag: ((CGFloat) -> Void)?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) { NSCursor.resizeLeftRight.push() }
+    override func mouseMoved(with event: NSEvent)   { NSCursor.resizeLeftRight.set() }
+    override func mouseExited(with event: NSEvent)  { NSCursor.pop() }
+    override func mouseDown(with event: NSEvent)    { NSCursor.resizeLeftRight.set() }
+    override func mouseDragged(with event: NSEvent) { NSCursor.resizeLeftRight.set(); onDrag?(event.deltaX) }
+    override func mouseUp(with event: NSEvent)      { NSCursor.pop() }
+}
 
 // MARK: - Helpers
 
