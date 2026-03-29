@@ -112,13 +112,12 @@ class PreviewPanel: NSPanel {
         let pageScript = WKUserScript(source: """
             (function() {
                 // Resize handle overlay
-                // Use screen coordinates (e.screenX - window.screenX) to detect
-                // proximity to the panel's left edge. This bypasses all CSS viewport
-                // offset issues (safe-area insets, body padding, WKWebView quirks)
-                // because screenX is in real screen pixels, not CSS px.
+                // window.screenX is always 0 in WKWebView (not a real browser window).
+                // Swift sets window.__panelLeft to the panel's actual screen X so
+                // we can compare e.screenX against the true left edge.
                 var resizing = false;
                 var activePtr = null;
-                function nearEdge(e) { return (e.screenX - window.screenX) < 8; }
+                function nearEdge(e) { return (e.screenX - (window.__panelLeft || 0)) < 8; }
 
                 // Cursor hint
                 document.addEventListener('mousemove', function(e) {
@@ -369,6 +368,12 @@ class PreviewPanel: NSPanel {
         let newX = screen.visibleFrame.maxX - newWidth
         setFrame(NSRect(x: newX, y: frame.minY, width: newWidth, height: frame.height), display: true)
         panelWidth = newWidth
+        pushPanelLeftToJS()
+    }
+
+    private func pushPanelLeftToJS() {
+        // window.screenX is always 0 in WKWebView, so we inject the real value.
+        webView.evaluateJavaScript("window.__panelLeft = \(frame.minX);", completionHandler: nil)
     }
 
     // MARK: - Keyboard
@@ -399,6 +404,10 @@ extension PreviewPanel: WKNavigationDelegate {
         }
         routeURL(url)
         decisionHandler(.cancel)
+    }
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        pushPanelLeftToJS()
     }
 }
 
