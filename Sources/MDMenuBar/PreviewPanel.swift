@@ -402,8 +402,23 @@ private class ResizeHandle: NSView {
     var onDrag: ((CGFloat) -> Void)?
     private var dragStartX: CGFloat = 0
 
-    override func resetCursorRects() {
-        addCursorRect(bounds, cursor: .resizeLeftRight)
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        NSCursor.resizeLeftRight.push()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        NSCursor.pop()
     }
 
     override func mouseDown(with event: NSEvent) {
