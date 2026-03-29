@@ -88,6 +88,22 @@ class PreviewPanel: NSPanel {
         // WebView
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
+
+        // Intercept all link clicks in JS — more reliable than WKNavigationDelegate
+        // for file:// URLs, which WKWebView can block before the delegate fires.
+        let linkScript = WKUserScript(source: """
+            document.addEventListener('click', function(e) {
+                var el = e.target;
+                while (el && el.tagName !== 'A') { el = el.parentElement; }
+                if (el && el.href) {
+                    e.preventDefault();
+                    window.webkit.messageHandlers.linkClicked.postMessage(el.href);
+                }
+            }, true);
+            """, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
+        config.userContentController.addUserScript(linkScript)
+        config.userContentController.add(self, name: "linkClicked")
+
         webView = WKWebView(frame: .zero, configuration: config)
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.setValue(false, forKey: "drawsBackground") // transparent bg, CSS handles it
@@ -300,6 +316,8 @@ class PreviewPanel: NSPanel {
 // MARK: - WKNavigationDelegate
 
 extension PreviewPanel: WKNavigationDelegate {
+    // JS handles all link clicks; this is a safety net to block any navigation
+    // that slips through (e.g. middle-click, keyboard activation).
     func webView(
         _ webView: WKWebView,
         decidePolicyFor action: WKNavigationAction,
@@ -309,21 +327,34 @@ extension PreviewPanel: WKNavigationDelegate {
             decisionHandler(.allow)   // initial HTML load — always allow
             return
         }
+        routeURL(url)
+        decisionHandler(.cancel)
+    }
+}
 
-        // Local .md/.markdown links open in the default editor
+// MARK: - WKScriptMessageHandler
+
+extension PreviewPanel: WKScriptMessageHandler {
+    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "linkClicked",
+              let urlString = message.body as? String,
+              let url = URL(string: urlString) else { return }
+        routeURL(url)
+    }
+}
+
+// MARK: - Link routing
+
+extension PreviewPanel {
+    private func routeURL(_ url: URL) {
         if url.isFileURL {
             let ext = url.pathExtension.lowercased()
             if ext == "md" || ext == "markdown" {
-                NSWorkspace.shared.open(url)
-                decisionHandler(.cancel)
-                return
+                NSWorkspace.shared.open(url)  // opens in default .md editor
             }
-            decisionHandler(.allow)
-            return
+            // other file:// URLs (images etc.) are already rendered inline — ignore
+        } else {
+            NSWorkspace.shared.open(url)      // http/https/mailto → default browser
         }
-
-        // Everything else (http/https, mailto, etc.) opens in the default browser
-        NSWorkspace.shared.open(url)
-        decisionHandler(.cancel)
     }
 }
