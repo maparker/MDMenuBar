@@ -103,60 +103,35 @@ class PreviewPanel: NSPanel {
         // Two responsibilities:
         //
         // 1. RESIZE HANDLE (cursor + drag)
-        //    WKWebView's WebContent process calls NSCursor.set() for the whole window,
-        //    overriding any AppKit cursor call — including from a separate NSPanel.
-        //    The only reliable cursor change is one WKWebView makes itself.
+        //    WKWebView re-evaluates cursor on every mousemove, overriding any
+        //    AppKit NSCursor call and any cursor set from mouseenter/mouseleave.
+        //    Setting documentElement.style.cursor inside a mousemove handler works
+        //    because it runs during that evaluation pass.
         //
-        //    We inject an invisible position:fixed div covering the left 12px.  On
-        //    mouseenter we set document.documentElement.style.cursor = 'ew-resize'
-        //    (confirmed working in earlier attempts); on mouseleave we clear it.
-        //    The div's natural boundary IS the viewport's left edge (position:fixed;
-        //    left:0), so no screen-coordinate math is needed — mouseenter fires at
-        //    exactly the right place.  Drag uses pointerdown/pointermove/movementX.
+        //    e.clientX is viewport-relative (0 = WKWebView left edge = panel left
+        //    edge), so "clientX < 12" is exactly the left 12pt of the panel.
+        //    No screen-coordinate math needed.
         //
         // 2. LINK INTERCEPTION
         //    WKWebView's sandbox intercepts file:// navigations before
         //    WKNavigationDelegate fires; JS click interception bypasses this.
         let pageScript = WKUserScript(source: """
             (function() {
-                // --- Resize handle ---
-                if (!document.getElementById('_rh')) {
-                    var rh = document.createElement('div');
-                    rh.id = '_rh';
-                    // No cursor: property here — we set it dynamically on mouseenter
-                    // because static CSS cursor on a transparent div is unreliable in
-                    // WKWebView; dynamic documentElement.style.cursor is confirmed to work.
-                    rh.style.cssText = 'position:fixed;left:0;top:0;width:12px;height:100vh;z-index:2147483647;-webkit-user-select:none;touch-action:none';
-                    document.body.appendChild(rh);
+                var dragging = false;
 
-                    // Cursor via documentElement (the approach confirmed to work in WKWebView)
-                    rh.addEventListener('mouseenter', function() {
-                        document.documentElement.style.cursor = 'ew-resize';
-                    });
-                    rh.addEventListener('mouseleave', function() {
-                        document.documentElement.style.cursor = '';
-                    });
+                document.addEventListener('mousemove', function(e) {
+                    var inHandle = e.clientX < 12;
+                    document.documentElement.style.cursor = inHandle ? 'ew-resize' : '';
+                    if (dragging)
+                        window.webkit.messageHandlers.resizeDrag.postMessage(e.movementX);
+                });
 
-                    // Drag
-                    var dragging = false, activePtr = null;
-                    rh.addEventListener('pointerdown', function(e) {
-                        dragging = true; activePtr = e.pointerId;
-                        try { rh.setPointerCapture(e.pointerId); } catch(ex) {}
-                        e.preventDefault();
-                    });
-                    rh.addEventListener('pointermove', function(e) {
-                        if (dragging && e.pointerId === activePtr)
-                            window.webkit.messageHandlers.resizeDrag.postMessage(e.movementX);
-                    });
-                    rh.addEventListener('pointerup', function(e) {
-                        if (e.pointerId === activePtr) {
-                            dragging = false; activePtr = null;
-                            document.documentElement.style.cursor = '';
-                        }
-                    });
-                }
+                document.addEventListener('mousedown', function(e) {
+                    if (e.clientX < 12) { dragging = true; e.preventDefault(); }
+                });
 
-                // --- Link interception ---
+                document.addEventListener('mouseup', function() { dragging = false; });
+
                 document.addEventListener('click', function(e) {
                     var el = e.target;
                     while (el && el.tagName !== 'A') { el = el.parentElement; }
