@@ -142,8 +142,10 @@ class PreviewPanel: NSPanel {
 
     // MARK: - Show / Hide
 
-    func showPanel() {
-        guard let screen = NSScreen.main else { return }
+    func showPanel(on screen: NSScreen? = nil) {
+        // Use the provided screen (ideally the one containing the status item button),
+        // falling back to the screen with the menu bar, then any available screen.
+        guard let screen = screen ?? NSScreen.main ?? NSScreen.screens.first else { return }
         let sf = screen.visibleFrame
         let w = Self.panelWidth
         let h = sf.height
@@ -170,7 +172,10 @@ class PreviewPanel: NSPanel {
             globalClickMonitor = nil
         }
 
-        guard let screen = NSScreen.main else { orderOut(nil); return }
+        // Slide back out to the right edge of whichever screen the panel is currently on
+        guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(frame) }) ?? NSScreen.main else {
+            orderOut(nil); return
+        }
         let target = NSRect(x: screen.visibleFrame.maxX, y: frame.minY, width: frame.width, height: frame.height)
 
         NSAnimationContext.runAnimationGroup { ctx in
@@ -182,8 +187,8 @@ class PreviewPanel: NSPanel {
         }
     }
 
-    func togglePanel() {
-        if isVisible { hidePanel() } else { showPanel() }
+    func togglePanel(on screen: NSScreen? = nil) {
+        if isVisible { hidePanel() } else { showPanel(on: screen) }
     }
 
     // MARK: - File loading

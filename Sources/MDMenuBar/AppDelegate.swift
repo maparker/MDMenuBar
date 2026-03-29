@@ -61,6 +61,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // The screen that contains the status item button — used to place the panel
+    // on the correct display in multi-monitor setups.
+    private var statusItemScreen: NSScreen? {
+        guard let buttonWindow = statusItem.button?.window else { return NSScreen.main }
+        return NSScreen.screens.first { $0.frame.contains(buttonWindow.frame.origin) } ?? NSScreen.main
+    }
+
     private func showContextMenu() {
         let menu = NSMenu()
         menu.addItem(withTitle: "Open File…",    action: #selector(openFile),     keyEquivalent: "o")
@@ -76,7 +83,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Panel toggling
 
     @objc func togglePanel() {
-        panel.togglePanel()
+        panel.togglePanel(on: statusItemScreen)
     }
 
     @objc private func openFile() {
