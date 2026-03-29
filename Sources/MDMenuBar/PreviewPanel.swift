@@ -103,49 +103,45 @@ class PreviewPanel: NSPanel {
         // Two responsibilities:
         //
         // 1. RESIZE HANDLE (cursor + drag)
-        //    WKWebView manages cursor for its entire window via NSCursor.set(), which
-        //    overrides any AppKit NSCursor call we make (including from a separate NSPanel).
-        //    The only reliable way to show a non-default cursor is to let WKWebView do it
-        //    itself via CSS on a DOM element.
+        //    WKWebView's WebContent process calls NSCursor.set() for the whole window,
+        //    overriding any AppKit cursor call — including from a separate NSPanel.
+        //    The only reliable cursor change is one WKWebView makes itself.
         //
-        //    We inject a full-height `position:fixed; left:0; width:8px` overlay div with
-        //    `cursor:ew-resize` and `pointer-events:all`.  Because this div is z-indexed
-        //    above everything (including text), WKWebView hits it first in event dispatch
-        //    and shows the ew-resize cursor — even over text content.  Drag deltas come
-        //    via pointermove.movementX posted to the `resizeDrag` message handler.
+        //    We inject an invisible position:fixed div covering the left 12px.  On
+        //    mouseenter we set document.documentElement.style.cursor = 'ew-resize'
+        //    (confirmed working in earlier attempts); on mouseleave we clear it.
+        //    The div's natural boundary IS the viewport's left edge (position:fixed;
+        //    left:0), so no screen-coordinate math is needed — mouseenter fires at
+        //    exactly the right place.  Drag uses pointerdown/pointermove/movementX.
         //
         // 2. LINK INTERCEPTION
-        //    WKWebView's content-process sandbox intercepts file:// navigations before
-        //    WKNavigationDelegate fires, so we catch all <a> clicks in JS and route them
-        //    through the `linkClicked` message handler instead.
+        //    WKWebView's sandbox intercepts file:// navigations before
+        //    WKNavigationDelegate fires; JS click interception bypasses this.
         let pageScript = WKUserScript(source: """
             (function() {
-                // --- Resize handle overlay ---
-                // position:fixed + left:0 puts the div at the viewport's left edge,
-                // which is the WKWebView frame's left edge (= the panel's left edge).
-                // pointer-events:all means it sits on top of text, so WKWebView always
-                // shows cursor:ew-resize here, never the iBeam text cursor.
+                // --- Resize handle ---
                 if (!document.getElementById('_rh')) {
                     var rh = document.createElement('div');
                     rh.id = '_rh';
-                    rh.style.cssText = [
-                        'position:fixed',
-                        'left:0',
-                        'top:0',
-                        'width:8px',
-                        'height:100%',
-                        'cursor:ew-resize',
-                        'z-index:2147483647',
-                        'pointer-events:all'
-                    ].join(';');
-                    document.documentElement.appendChild(rh);
+                    // No cursor: property here — we set it dynamically on mouseenter
+                    // because static CSS cursor on a transparent div is unreliable in
+                    // WKWebView; dynamic documentElement.style.cursor is confirmed to work.
+                    rh.style.cssText = 'position:fixed;left:0;top:0;width:12px;height:100vh;z-index:2147483647;-webkit-user-select:none;touch-action:none';
+                    document.body.appendChild(rh);
 
+                    // Cursor via documentElement (the approach confirmed to work in WKWebView)
+                    rh.addEventListener('mouseenter', function() {
+                        document.documentElement.style.cursor = 'ew-resize';
+                    });
+                    rh.addEventListener('mouseleave', function() {
+                        document.documentElement.style.cursor = '';
+                    });
+
+                    // Drag
                     var dragging = false, activePtr = null;
-
                     rh.addEventListener('pointerdown', function(e) {
-                        dragging = true;
-                        activePtr = e.pointerId;
-                        rh.setPointerCapture(e.pointerId);
+                        dragging = true; activePtr = e.pointerId;
+                        try { rh.setPointerCapture(e.pointerId); } catch(ex) {}
                         e.preventDefault();
                     });
                     rh.addEventListener('pointermove', function(e) {
@@ -153,7 +149,10 @@ class PreviewPanel: NSPanel {
                             window.webkit.messageHandlers.resizeDrag.postMessage(e.movementX);
                     });
                     rh.addEventListener('pointerup', function(e) {
-                        if (e.pointerId === activePtr) { dragging = false; activePtr = null; }
+                        if (e.pointerId === activePtr) {
+                            dragging = false; activePtr = null;
+                            document.documentElement.style.cursor = '';
+                        }
                     });
                 }
 
