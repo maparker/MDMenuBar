@@ -10,7 +10,6 @@ class PreviewPanel: NSPanel {
     private var watchSource: DispatchSourceFileSystemObject?
     private var currentFilePath: String?
     private var globalClickMonitor: Any?
-    private var cursorPushed = false
 
     private static let minWidth: CGFloat = 300
     private static let maxWidth: CGFloat = 1200
@@ -42,10 +41,9 @@ class PreviewPanel: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
-        acceptsMouseMovedEvents = true  // required for .mouseMoved events to be dispatched
+        acceptsMouseMovedEvents = true  // required for sendEvent to receive .mouseMoved
 
         buildContentView()
-        setupCursorMonitor()
     }
 
     private func buildContentView() {
@@ -226,28 +224,22 @@ class PreviewPanel: NSPanel {
 
     }
 
-    private func setupCursorMonitor() {
-        // addGlobalMonitorForEvents only fires for events going to OTHER apps.
-        // When the mouse is over our own panel we need a local monitor.
-        // acceptsMouseMovedEvents = true (set in configure()) makes the OS
-        // deliver .mouseMoved events to this process so the local monitor sees them.
-        NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
-            self?.updateHandleCursor()
-            return event
+    // sendEvent() receives every event dispatched to the window — the same path
+    // that delivers mouseDown/mouseDragged to the resize handle. Using it here
+    // avoids all the uncertainty around tracking areas, local monitors, and
+    // whether .accessory-policy apps receive mouseMoved through other channels.
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .mouseMoved {
+            // handle.frame is in the contentView (root) coordinate system,
+            // which equals the window base coordinate system.
+            // event.locationInWindow is also in window base coordinates.
+            if handle.frame.contains(event.locationInWindow) {
+                NSCursor.resizeLeftRight.set()
+            } else {
+                NSCursor.arrow.set()
+            }
         }
-    }
-
-    private func updateHandleCursor() {
-        let mouse = NSEvent.mouseLocation
-        let handleScreenFrame = convertToScreen(handle.convert(handle.bounds, to: nil))
-        let over = handleScreenFrame.contains(mouse)
-        if over && !cursorPushed {
-            NSCursor.resizeLeftRight.push()
-            cursorPushed = true
-        } else if !over && cursorPushed {
-            NSCursor.pop()
-            cursorPushed = false
-        }
+        super.sendEvent(event)
     }
 
     @objc func hidePanel() {
@@ -255,10 +247,7 @@ class PreviewPanel: NSPanel {
             NSEvent.removeMonitor(monitor)
             globalClickMonitor = nil
         }
-        if cursorPushed {
-            NSCursor.pop()
-            cursorPushed = false
-        }
+        NSCursor.arrow.set()
 
         // Slide back out to the right edge of whichever screen the panel is currently on
         guard let screen = NSScreen.screens.first(where: { $0.frame.intersects(frame) }) ?? NSScreen.main else {
@@ -451,10 +440,12 @@ private class ResizeHandle: NSView {
     private var dragStartX: CGFloat = 0
 
     override func mouseDown(with event: NSEvent) {
+        NSCursor.resizeLeftRight.set()
         dragStartX = convert(event.locationInWindow, from: nil).x
     }
 
     override func mouseDragged(with event: NSEvent) {
+        NSCursor.resizeLeftRight.set()
         let currentX = convert(event.locationInWindow, from: nil).x
         onDrag?(currentX - dragStartX)
         dragStartX = currentX
