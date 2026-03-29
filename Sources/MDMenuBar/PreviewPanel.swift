@@ -91,6 +91,7 @@ class PreviewPanel: NSPanel {
         webView = WKWebView(frame: .zero, configuration: config)
         webView.translatesAutoresizingMaskIntoConstraints = false
         webView.setValue(false, forKey: "drawsBackground") // transparent bg, CSS handles it
+        webView.navigationDelegate = self
 
         let scrollBg = NSVisualEffectView()
         scrollBg.material = .contentBackground
@@ -293,5 +294,30 @@ class PreviewPanel: NSPanel {
         } else {
             super.keyDown(with: event)
         }
+    }
+}
+
+// MARK: - WKNavigationDelegate
+
+extension PreviewPanel: WKNavigationDelegate {
+    func webView(
+        _ webView: WKWebView,
+        decidePolicyFor action: WKNavigationAction,
+        decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+    ) {
+        guard action.navigationType == .linkActivated, let url = action.request.url else {
+            decisionHandler(.allow)   // initial HTML load — always allow
+            return
+        }
+
+        // Local file links (relative paths in the markdown) stay in the view
+        if url.isFileURL {
+            decisionHandler(.allow)
+            return
+        }
+
+        // Everything else (http/https, mailto, etc.) opens in the default browser
+        NSWorkspace.shared.open(url)
+        decisionHandler(.cancel)
     }
 }
