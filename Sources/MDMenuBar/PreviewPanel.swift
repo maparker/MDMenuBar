@@ -10,7 +10,6 @@ class PreviewPanel: NSPanel {
     private var watchSource: DispatchSourceFileSystemObject?
     private var currentFilePath: String?
     private var globalClickMonitor: Any?
-    private var globalMoveMonitor: Any?
     private var cursorPushed = false
 
     private static let minWidth: CGFloat = 300
@@ -43,8 +42,10 @@ class PreviewPanel: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = true
+        acceptsMouseMovedEvents = true  // required for .mouseMoved events to be dispatched
 
         buildContentView()
+        setupCursorMonitor()
     }
 
     private func buildContentView() {
@@ -223,12 +224,16 @@ class PreviewPanel: NSPanel {
             self?.hidePanel()
         }
 
-        // Monitor mouse movement to show resize cursor over the left-edge handle.
-        // NSTrackingArea is unreliable for apps with .accessory activation policy
-        // (the app never "activates", so tracking areas may not fire). A global
-        // monitor works regardless of activation state.
-        globalMoveMonitor = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved) { [weak self] _ in
+    }
+
+    private func setupCursorMonitor() {
+        // addGlobalMonitorForEvents only fires for events going to OTHER apps.
+        // When the mouse is over our own panel we need a local monitor.
+        // acceptsMouseMovedEvents = true (set in configure()) makes the OS
+        // deliver .mouseMoved events to this process so the local monitor sees them.
+        NSEvent.addLocalMonitorForEvents(matching: .mouseMoved) { [weak self] event in
             self?.updateHandleCursor()
+            return event
         }
     }
 
@@ -249,10 +254,6 @@ class PreviewPanel: NSPanel {
         if let monitor = globalClickMonitor {
             NSEvent.removeMonitor(monitor)
             globalClickMonitor = nil
-        }
-        if let monitor = globalMoveMonitor {
-            NSEvent.removeMonitor(monitor)
-            globalMoveMonitor = nil
         }
         if cursorPushed {
             NSCursor.pop()
