@@ -112,21 +112,40 @@ class PreviewPanel: NSPanel {
         let pageScript = WKUserScript(source: """
             (function() {
                 // Resize handle overlay
-                var rh = document.createElement('div');
-                rh.style.cssText = 'position:fixed;left:0;top:0;width:8px;height:100vh;cursor:ew-resize;z-index:2147483647;user-select:none;touch-action:none;';
-                document.documentElement.appendChild(rh);
-                // setPointerCapture keeps events coming even when the cursor
-                // leaves the WKWebView bounds during a drag.
-                rh.addEventListener('pointerdown', function(e) {
-                    rh.setPointerCapture(e.pointerId);
-                    e.preventDefault(); e.stopPropagation();
+                // Use screen coordinates (e.screenX - window.screenX) to detect
+                // proximity to the panel's left edge. This bypasses all CSS viewport
+                // offset issues (safe-area insets, body padding, WKWebView quirks)
+                // because screenX is in real screen pixels, not CSS px.
+                var resizing = false;
+                var activePtr = null;
+                function nearEdge(e) { return (e.screenX - window.screenX) < 8; }
+
+                // Cursor hint
+                document.addEventListener('mousemove', function(e) {
+                    if (!resizing)
+                        document.documentElement.style.cursor = nearEdge(e) ? 'ew-resize' : '';
                 });
-                rh.addEventListener('pointermove', function(e) {
-                    if (rh.hasPointerCapture(e.pointerId))
+
+                // Start drag — capture phase so we beat other handlers
+                document.addEventListener('pointerdown', function(e) {
+                    if (!nearEdge(e)) return;
+                    resizing = true; activePtr = e.pointerId;
+                    e.target.setPointerCapture(e.pointerId); // keep events outside WKWebView
+                    e.preventDefault();
+                }, true);
+
+                // Drag delta
+                document.addEventListener('pointermove', function(e) {
+                    if (resizing && e.pointerId === activePtr)
                         window.webkit.messageHandlers.resizeDrag.postMessage(e.movementX);
                 });
-                rh.addEventListener('pointerup', function(e) {
-                    rh.releasePointerCapture(e.pointerId);
+
+                // End drag
+                document.addEventListener('pointerup', function(e) {
+                    if (resizing && e.pointerId === activePtr) {
+                        resizing = false; activePtr = null;
+                        document.documentElement.style.cursor = '';
+                    }
                 });
 
                 // Link-click interception
