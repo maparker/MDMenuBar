@@ -1,0 +1,6 @@
+.build/
+*.o
+*.d
+*.xcodeproj
+xcuserdata/
+.DS_Store
