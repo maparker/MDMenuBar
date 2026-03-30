@@ -10,6 +10,13 @@ class PreviewPanel: NSPanel {
     private var currentFilePath: String?
     private var globalClickMonitor: Any?
 
+    private var tabControl: NSSegmentedControl!
+    private var previewControls: NSView!
+    private var scratchControls: NSView!
+    private var previewContent: NSView!
+    private var scratchView: ScratchView!
+    private var scratchFileLabel: NSTextField!
+
     private static let minWidth: CGFloat = 300
     private static let maxWidth: CGFloat = 1200
     private static let defaultWidth: CGFloat = 520
@@ -50,42 +57,61 @@ class PreviewPanel: NSPanel {
         root.layer?.cornerRadius = 12
         root.layer?.masksToBounds = true
 
-        // Toolbar strip at top
+        // MARK: Title bar
+
         let bar = NSVisualEffectView()
         bar.material = .sidebar
         bar.blendingMode = .behindWindow
         bar.state = .active
         bar.translatesAutoresizingMaskIntoConstraints = false
 
-        // Drag grip in title bar — visual affordance showing the panel is resizable
         let grip = DragGripView()
         grip.onDrag = { [weak self] delta in self?.resizeByDelta(delta) }
         grip.translatesAutoresizingMaskIntoConstraints = false
 
-        let titleLabel = NSTextField(labelWithString: "MD Preview")
-        titleLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        titleLabel.textColor = .secondaryLabelColor
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        // Tab switcher
+        tabControl = NSSegmentedControl(labels: ["Preview", "Scratch"],
+                                        trackingMode: .selectOne,
+                                        target: self,
+                                        action: #selector(tabChanged))
+        tabControl.selectedSegment = 0
+        tabControl.translatesAutoresizingMaskIntoConstraints = false
 
+        let closeBtn = makeToolbarButton(systemSymbol: "xmark", action: #selector(hidePanel))
+
+        // Preview-tab controls
         fileLabel = NSTextField(labelWithString: "No file selected")
         fileLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         fileLabel.textColor = .tertiaryLabelColor
         fileLabel.lineBreakMode = .byTruncatingMiddle
         fileLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let reloadBtn = makeToolbarButton(systemSymbol: "arrow.clockwise", action: #selector(reload))
         let openBtn   = makeToolbarButton(systemSymbol: "doc.badge.plus",  action: #selector(openFile))
-        let closeBtn  = makeToolbarButton(systemSymbol: "xmark",            action: #selector(hidePanel))
+        let reloadBtn = makeToolbarButton(systemSymbol: "arrow.clockwise", action: #selector(reload))
+        previewControls = NSStackView(views: [fileLabel, openBtn, reloadBtn])
+        (previewControls as! NSStackView).orientation = .horizontal
+        (previewControls as! NSStackView).spacing = 8
+        previewControls.translatesAutoresizingMaskIntoConstraints = false
 
-        let btnStack = NSStackView(views: [openBtn, reloadBtn, closeBtn])
-        btnStack.orientation = .horizontal
-        btnStack.spacing = 8
-        btnStack.translatesAutoresizingMaskIntoConstraints = false
+        // Scratch-tab controls
+        scratchFileLabel = NSTextField(labelWithString: "No scratch file")
+        scratchFileLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        scratchFileLabel.textColor = .tertiaryLabelColor
+        scratchFileLabel.lineBreakMode = .byTruncatingMiddle
+        scratchFileLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let chooseBtn = makeToolbarButton(systemSymbol: "folder.badge.plus", action: #selector(chooseScratchFile))
+        scratchControls = NSStackView(views: [scratchFileLabel, chooseBtn])
+        (scratchControls as! NSStackView).orientation = .horizontal
+        (scratchControls as! NSStackView).spacing = 8
+        scratchControls.translatesAutoresizingMaskIntoConstraints = false
+        scratchControls.isHidden = true
 
         bar.addSubview(grip)
-        bar.addSubview(titleLabel)
-        bar.addSubview(fileLabel)
-        bar.addSubview(btnStack)
+        bar.addSubview(tabControl)
+        bar.addSubview(previewControls)
+        bar.addSubview(scratchControls)
+        bar.addSubview(closeBtn)
 
         NSLayoutConstraint.activate([
             bar.heightAnchor.constraint(equalToConstant: 44),
@@ -95,27 +121,32 @@ class PreviewPanel: NSPanel {
             grip.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
             grip.widthAnchor.constraint(equalToConstant: 16),
 
-            titleLabel.leadingAnchor.constraint(equalTo: grip.trailingAnchor, constant: 4),
-            titleLabel.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            fileLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 10),
-            fileLabel.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            fileLabel.trailingAnchor.constraint(lessThanOrEqualTo: btnStack.leadingAnchor, constant: -10),
-            btnStack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -12),
-            btnStack.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            tabControl.leadingAnchor.constraint(equalTo: grip.trailingAnchor, constant: 6),
+            tabControl.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+
+            previewControls.leadingAnchor.constraint(equalTo: tabControl.trailingAnchor, constant: 10),
+            previewControls.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            previewControls.trailingAnchor.constraint(lessThanOrEqualTo: closeBtn.leadingAnchor, constant: -10),
+
+            scratchControls.leadingAnchor.constraint(equalTo: tabControl.trailingAnchor, constant: 10),
+            scratchControls.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            scratchControls.trailingAnchor.constraint(lessThanOrEqualTo: closeBtn.leadingAnchor, constant: -10),
+
+            closeBtn.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -12),
+            closeBtn.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
         ])
 
-        // Separator
+        // MARK: Separator
+
         let sep = NSBox()
         sep.boxType = .separator
         sep.translatesAutoresizingMaskIntoConstraints = false
 
-        // WebView
+        // MARK: Preview content
+
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-
-        // Link interception: WKWebView's sandbox intercepts file:// navigations
-        // before WKNavigationDelegate fires; JS click handler bypasses this.
-        let pageScript = WKUserScript(source: """
+        let linkScript = WKUserScript(source: """
             (function() {
                 document.addEventListener('click', function(e) {
                     var el = e.target;
@@ -127,7 +158,7 @@ class PreviewPanel: NSPanel {
                 }, true);
             })();
             """, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
-        config.userContentController.addUserScript(pageScript)
+        config.userContentController.addUserScript(linkScript)
         config.userContentController.add(self, name: "linkClicked")
 
         webView = WKWebView(frame: .zero, configuration: config)
@@ -135,13 +166,10 @@ class PreviewPanel: NSPanel {
         webView.setValue(false, forKey: "drawsBackground")
         webView.navigationDelegate = self
 
-        // Left-edge resize handle — full height strip that does NOT contain
-        // WKWebView, so NSCursor works here (the app is activated in showPanel).
         let edgeHandle = ResizeEdgeView()
         edgeHandle.onDrag = { [weak self] delta in self?.resizeByDelta(delta) }
         edgeHandle.translatesAutoresizingMaskIntoConstraints = false
 
-        // Background behind the handle strip — same material so seam is invisible
         let handleBg = NSVisualEffectView()
         handleBg.material = .contentBackground
         handleBg.blendingMode = .behindWindow
@@ -161,12 +189,48 @@ class PreviewPanel: NSPanel {
             webView.trailingAnchor.constraint(equalTo: scrollBg.trailingAnchor),
         ])
 
+        previewContent = NSView()
+        previewContent.translatesAutoresizingMaskIntoConstraints = false
+        previewContent.addSubview(handleBg)
+        previewContent.addSubview(scrollBg)
+        previewContent.addSubview(edgeHandle)
+        NSLayoutConstraint.activate([
+            handleBg.topAnchor.constraint(equalTo: previewContent.topAnchor),
+            handleBg.bottomAnchor.constraint(equalTo: previewContent.bottomAnchor),
+            handleBg.leadingAnchor.constraint(equalTo: previewContent.leadingAnchor),
+            handleBg.widthAnchor.constraint(equalToConstant: Self.handleWidth),
+
+            edgeHandle.topAnchor.constraint(equalTo: previewContent.topAnchor),
+            edgeHandle.bottomAnchor.constraint(equalTo: previewContent.bottomAnchor),
+            edgeHandle.leadingAnchor.constraint(equalTo: previewContent.leadingAnchor),
+            edgeHandle.widthAnchor.constraint(equalToConstant: Self.handleWidth),
+
+            scrollBg.topAnchor.constraint(equalTo: previewContent.topAnchor),
+            scrollBg.bottomAnchor.constraint(equalTo: previewContent.bottomAnchor),
+            scrollBg.leadingAnchor.constraint(equalTo: handleBg.trailingAnchor),
+            scrollBg.trailingAnchor.constraint(equalTo: previewContent.trailingAnchor),
+        ])
+
+        // MARK: Scratch content
+
+        scratchView = ScratchView()
+        scratchView.translatesAutoresizingMaskIntoConstraints = false
+        scratchView.isHidden = true
+        scratchView.onFileChange = { [weak self] path in
+            self?.updateScratchLabel(path: path)
+        }
+        if let path = scratchView.filePath {
+            updateScratchLabel(path: path)
+            scratchView.startWatching()
+        }
+
+        // MARK: Assemble
+
         root.addSubview(bar)
         root.addSubview(sep)
-        root.addSubview(handleBg)
-        root.addSubview(scrollBg)
-        root.addSubview(edgeHandle) // on top for mouse events
-        bar.translatesAutoresizingMaskIntoConstraints = false
+        root.addSubview(previewContent)
+        root.addSubview(scratchView)
+
         NSLayoutConstraint.activate([
             bar.topAnchor.constraint(equalTo: root.topAnchor),
             bar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
@@ -176,26 +240,36 @@ class PreviewPanel: NSPanel {
             sep.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             sep.trailingAnchor.constraint(equalTo: root.trailingAnchor),
 
-            // Handle strip: full height below separator
-            handleBg.topAnchor.constraint(equalTo: sep.bottomAnchor),
-            handleBg.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            handleBg.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            handleBg.widthAnchor.constraint(equalToConstant: Self.handleWidth),
+            previewContent.topAnchor.constraint(equalTo: sep.bottomAnchor),
+            previewContent.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            previewContent.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            previewContent.trailingAnchor.constraint(equalTo: root.trailingAnchor),
 
-            edgeHandle.topAnchor.constraint(equalTo: sep.bottomAnchor),
-            edgeHandle.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            edgeHandle.leadingAnchor.constraint(equalTo: root.leadingAnchor),
-            edgeHandle.widthAnchor.constraint(equalToConstant: Self.handleWidth),
-
-            // WebView area starts after the handle strip
-            scrollBg.topAnchor.constraint(equalTo: sep.bottomAnchor),
-            scrollBg.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            scrollBg.leadingAnchor.constraint(equalTo: handleBg.trailingAnchor),
-            scrollBg.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            scratchView.topAnchor.constraint(equalTo: sep.bottomAnchor),
+            scratchView.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            scratchView.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            scratchView.trailingAnchor.constraint(equalTo: root.trailingAnchor),
         ])
 
         contentView = root
         titleBar = bar
+    }
+
+    @objc private func tabChanged() {
+        let isPreview = tabControl.selectedSegment == 0
+        previewControls.isHidden = !isPreview
+        scratchControls.isHidden = isPreview
+        previewContent.isHidden = !isPreview
+        scratchView.isHidden = isPreview
+        if !isPreview { scratchView.reload() }
+    }
+
+    @objc private func chooseScratchFile() {
+        scratchView.chooseScratchFile()
+    }
+
+    private func updateScratchLabel(path: String) {
+        scratchFileLabel.stringValue = URL(fileURLWithPath: path).lastPathComponent
     }
 
     private func makeToolbarButton(systemSymbol: String, action: Selector) -> NSButton {
