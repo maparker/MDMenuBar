@@ -10,7 +10,9 @@ A lightweight macOS menu bar app that renders a Markdown file as a styled previe
 - **Slides in from the right** — smooth animation, dismisses with a click outside or keyboard shortcut
 - **Global hotkey** — toggle the panel from any app with **⌘⇧M** (no accessibility permissions required)
 - **Live reload** — the preview updates automatically whenever the file changes on disk
-- **Scratch pad** — a built-in tab for quick notes; entries are timestamped and prepended to a configurable Markdown file
+- **Scratch pad** — a built-in tab for quick notes; daily files (`scratch-YYYY-MM-DD.md`) are created automatically in a folder you choose, with previews of and links to previous days
+- **Search** — search across all scratch files to find past entries
+- **Pin mode** — pin the panel open so clicking outside doesn't dismiss it
 - **Resizable** — drag the left edge of the panel to adjust width (persisted across launches)
 - **Remembers your file** — reopens the last viewed file on next launch
 - **No dock icon** — lives entirely in the menu bar
@@ -56,7 +58,8 @@ swift run
 |---|---|
 | **⌘⇧M** or Escape | Close panel |
 | **⌘W** | Close panel |
-| Click outside | Close panel |
+| Click outside | Close panel (unless pinned) |
+| Pin button | Toggle pin mode — keeps panel open when clicking outside |
 | ↺ button | Reload file from disk |
 | Folder button | Open a different file |
 | × button | Close panel |
@@ -67,8 +70,9 @@ swift run
 | Action | Result |
 |---|---|
 | Type in the text area | Compose a new entry |
-| **⌘↩** or **Add Entry** button | Prepend entry with timestamp to scratch file |
-| Folder button | Choose or create a scratch `.md` file |
+| **⌘↩** or **Add Entry** button | Prepend entry with timestamp to today's scratch file |
+| Folder button | Choose a folder for daily scratch files |
+| Search field | Search across all scratch files for matching entries |
 
 ## Supported Markdown
 

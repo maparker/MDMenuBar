@@ -18,6 +18,8 @@ class PreviewPanel: NSPanel {
     private var previewContent: NSView!
     private var scratchView: ScratchView!
     private var scratchFileLabel: NSTextField!
+    private var pinButton: NSButton!
+    private var isPinned = false
 
     private static let minWidth: CGFloat = 300
     private static let maxWidth: CGFloat = 1200
@@ -79,6 +81,9 @@ class PreviewPanel: NSPanel {
         tabControl.selectedSegment = 0
         tabControl.translatesAutoresizingMaskIntoConstraints = false
 
+        pinButton = makeToolbarButton(systemSymbol: "pin", action: #selector(togglePin))
+        pinButton.contentTintColor = .tertiaryLabelColor
+
         let closeBtn = makeToolbarButton(systemSymbol: "xmark", action: #selector(hidePanel))
 
         // Preview-tab controls
@@ -96,13 +101,13 @@ class PreviewPanel: NSPanel {
         previewControls.translatesAutoresizingMaskIntoConstraints = false
 
         // Scratch-tab controls
-        scratchFileLabel = NSTextField(labelWithString: "No scratch file")
+        scratchFileLabel = NSTextField(labelWithString: "No scratch folder")
         scratchFileLabel.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         scratchFileLabel.textColor = .tertiaryLabelColor
         scratchFileLabel.lineBreakMode = .byTruncatingMiddle
         scratchFileLabel.translatesAutoresizingMaskIntoConstraints = false
 
-        let chooseBtn = makeToolbarButton(systemSymbol: "folder.badge.plus", action: #selector(chooseScratchFile))
+        let chooseBtn = makeToolbarButton(systemSymbol: "folder.badge.plus", action: #selector(chooseScratchFolder))
         scratchControls = NSStackView(views: [scratchFileLabel, chooseBtn])
         (scratchControls as! NSStackView).orientation = .horizontal
         (scratchControls as! NSStackView).spacing = 8
@@ -113,6 +118,7 @@ class PreviewPanel: NSPanel {
         bar.addSubview(tabControl)
         bar.addSubview(previewControls)
         bar.addSubview(scratchControls)
+        bar.addSubview(pinButton)
         bar.addSubview(closeBtn)
 
         NSLayoutConstraint.activate([
@@ -128,11 +134,14 @@ class PreviewPanel: NSPanel {
 
             previewControls.leadingAnchor.constraint(equalTo: tabControl.trailingAnchor, constant: 10),
             previewControls.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            previewControls.trailingAnchor.constraint(lessThanOrEqualTo: closeBtn.leadingAnchor, constant: -10),
+            previewControls.trailingAnchor.constraint(lessThanOrEqualTo: pinButton.leadingAnchor, constant: -10),
 
             scratchControls.leadingAnchor.constraint(equalTo: tabControl.trailingAnchor, constant: 10),
             scratchControls.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            scratchControls.trailingAnchor.constraint(lessThanOrEqualTo: closeBtn.leadingAnchor, constant: -10),
+            scratchControls.trailingAnchor.constraint(lessThanOrEqualTo: pinButton.leadingAnchor, constant: -10),
+
+            pinButton.trailingAnchor.constraint(equalTo: closeBtn.leadingAnchor, constant: -4),
+            pinButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
 
             closeBtn.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -12),
             closeBtn.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
@@ -218,12 +227,11 @@ class PreviewPanel: NSPanel {
         scratchView = ScratchView()
         scratchView.translatesAutoresizingMaskIntoConstraints = false
         scratchView.isHidden = true
-        scratchView.onFileChange = { [weak self] path in
+        scratchView.onFolderChange = { [weak self] path in
             self?.updateScratchLabel(path: path)
         }
-        if let path = scratchView.filePath {
+        if let path = scratchView.folderPath {
             updateScratchLabel(path: path)
-            scratchView.startWatching()
         }
 
         // MARK: Assemble
@@ -257,6 +265,23 @@ class PreviewPanel: NSPanel {
         titleBar = bar
     }
 
+    @objc private func togglePin() {
+        isPinned.toggle()
+        pinButton.contentTintColor = isPinned ? .controlAccentColor : .tertiaryLabelColor
+        pinButton.image = NSImage(systemSymbolName: isPinned ? "pin.fill" : "pin",
+                                   accessibilityDescription: nil)
+        if isPinned {
+            if let monitor = globalClickMonitor {
+                NSEvent.removeMonitor(monitor)
+                globalClickMonitor = nil
+            }
+        } else if isVisible {
+            globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+                self?.hidePanel()
+            }
+        }
+    }
+
     @objc private func tabChanged() {
         let isPreview = tabControl.selectedSegment == 0
         previewControls.isHidden = !isPreview
@@ -266,12 +291,12 @@ class PreviewPanel: NSPanel {
         if !isPreview { scratchView.reload(); scratchView.focusTextView() }
     }
 
-    @objc private func chooseScratchFile() {
-        scratchView.chooseScratchFile()
+    @objc private func chooseScratchFolder() {
+        scratchView.chooseScratchFolder()
     }
 
     private func updateScratchLabel(path: String) {
-        scratchFileLabel.stringValue = URL(fileURLWithPath: path).lastPathComponent
+        scratchFileLabel.stringValue = URL(fileURLWithPath: path).lastPathComponent + "/"
     }
 
     private func makeToolbarButton(systemSymbol: String, action: Selector) -> NSButton {
@@ -309,8 +334,10 @@ class PreviewPanel: NSPanel {
             animator().setFrame(NSRect(x: sf.maxX - w, y: sf.minY, width: w, height: h), display: true)
         }
 
-        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
-            self?.hidePanel()
+        if !isPinned {
+            globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+                self?.hidePanel()
+            }
         }
     }
 
