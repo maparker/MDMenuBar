@@ -261,7 +261,7 @@ class PreviewPanel: NSPanel {
         scratchControls.isHidden = isPreview
         previewContent.isHidden = !isPreview
         scratchView.isHidden = isPreview
-        if !isPreview { scratchView.reload() }
+        if !isPreview { scratchView.reload(); scratchView.focusTextView() }
     }
 
     @objc private func chooseScratchFile() {
