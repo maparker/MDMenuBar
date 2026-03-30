@@ -33,8 +33,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         )
         panel.restoreLastFile()
 
+        setupMainMenu()
         setupStatusItem()
         setupHotKey()
+    }
+
+    // MARK: - Main menu (required for ⌘C/⌘V/⌘Z to route through responder chain)
+
+    private func setupMainMenu() {
+        let mainMenu = NSMenu()
+
+        let editItem = NSMenuItem()
+        mainMenu.addItem(editItem)
+        let editMenu = NSMenu(title: "Edit")
+        editItem.submenu = editMenu
+
+        editMenu.addItem(withTitle: "Undo",  action: #selector(UndoManager.undo),  keyEquivalent: "z")
+        editMenu.addItem(withTitle: "Redo",  action: #selector(UndoManager.redo),  keyEquivalent: "Z")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut",   action: #selector(NSText.cut(_:)),    keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy",  action: #selector(NSText.copy(_:)),   keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)),  keyEquivalent: "v")
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+        NSApp.mainMenu = mainMenu
     }
 
     // MARK: - Status bar
