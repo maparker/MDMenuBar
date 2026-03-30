@@ -14,6 +14,7 @@ class PreviewPanel: NSPanel {
     private static let maxWidth: CGFloat = 1200
     private static let defaultWidth: CGFloat = 520
     private static let widthKey = "previewPanelWidth"
+    private static let handleWidth: CGFloat = 8
 
     private var panelWidth: CGFloat {
         get {
@@ -56,6 +57,11 @@ class PreviewPanel: NSPanel {
         bar.state = .active
         bar.translatesAutoresizingMaskIntoConstraints = false
 
+        // Drag grip in title bar — visual affordance showing the panel is resizable
+        let grip = DragGripView()
+        grip.onDrag = { [weak self] delta in self?.resizeByDelta(delta) }
+        grip.translatesAutoresizingMaskIntoConstraints = false
+
         let titleLabel = NSTextField(labelWithString: "MD Preview")
         titleLabel.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
         titleLabel.textColor = .secondaryLabelColor
@@ -76,13 +82,20 @@ class PreviewPanel: NSPanel {
         btnStack.spacing = 8
         btnStack.translatesAutoresizingMaskIntoConstraints = false
 
+        bar.addSubview(grip)
         bar.addSubview(titleLabel)
         bar.addSubview(fileLabel)
         bar.addSubview(btnStack)
 
         NSLayoutConstraint.activate([
             bar.heightAnchor.constraint(equalToConstant: 44),
-            titleLabel.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
+
+            grip.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            grip.topAnchor.constraint(equalTo: bar.topAnchor),
+            grip.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+            grip.widthAnchor.constraint(equalToConstant: 16),
+
+            titleLabel.leadingAnchor.constraint(equalTo: grip.trailingAnchor, constant: 4),
             titleLabel.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
             fileLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 10),
             fileLabel.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
@@ -100,36 +113,10 @@ class PreviewPanel: NSPanel {
         let config = WKWebViewConfiguration()
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
 
-        // Two responsibilities:
-        //
-        // 1. RESIZE HANDLE (cursor + drag)
-        //    WKWebView re-evaluates cursor on every mousemove, overriding any
-        //    AppKit NSCursor call and any cursor set from mouseenter/mouseleave.
-        //    Setting documentElement.style.cursor inside a mousemove handler works
-        //    because it runs during that evaluation pass.
-        //
-        //    e.clientX is viewport-relative (0 = WKWebView left edge = panel left
-        //    edge), so "clientX < 12" is exactly the left 12pt of the panel.
-        //    No screen-coordinate math needed.
-        //
-        // 2. LINK INTERCEPTION
-        //    WKWebView's sandbox intercepts file:// navigations before
-        //    WKNavigationDelegate fires; JS click interception bypasses this.
+        // Link interception: WKWebView's sandbox intercepts file:// navigations
+        // before WKNavigationDelegate fires; JS click handler bypasses this.
         let pageScript = WKUserScript(source: """
             (function() {
-                var dragging = false;
-
-                document.addEventListener('mousemove', function(e) {
-                    if (dragging)
-                        window.webkit.messageHandlers.resizeDrag.postMessage(e.movementX);
-                });
-
-                document.addEventListener('mousedown', function(e) {
-                    if (e.clientX < 12) { dragging = true; e.preventDefault(); }
-                });
-
-                document.addEventListener('mouseup', function() { dragging = false; });
-
                 document.addEventListener('click', function(e) {
                     var el = e.target;
                     while (el && el.tagName !== 'A') { el = el.parentElement; }
@@ -142,12 +129,24 @@ class PreviewPanel: NSPanel {
             """, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         config.userContentController.addUserScript(pageScript)
         config.userContentController.add(self, name: "linkClicked")
-        config.userContentController.add(self, name: "resizeDrag")
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.translatesAutoresizingMaskIntoConstraints = false
-        webView.setValue(false, forKey: "drawsBackground") // transparent bg, CSS handles it
+        webView.setValue(false, forKey: "drawsBackground")
         webView.navigationDelegate = self
+
+        // Left-edge resize handle — full height strip that does NOT contain
+        // WKWebView, so NSCursor works here (the app is activated in showPanel).
+        let edgeHandle = ResizeEdgeView()
+        edgeHandle.onDrag = { [weak self] delta in self?.resizeByDelta(delta) }
+        edgeHandle.translatesAutoresizingMaskIntoConstraints = false
+
+        // Background behind the handle strip — same material so seam is invisible
+        let handleBg = NSVisualEffectView()
+        handleBg.material = .contentBackground
+        handleBg.blendingMode = .behindWindow
+        handleBg.state = .active
+        handleBg.translatesAutoresizingMaskIntoConstraints = false
 
         let scrollBg = NSVisualEffectView()
         scrollBg.material = .contentBackground
@@ -164,18 +163,34 @@ class PreviewPanel: NSPanel {
 
         root.addSubview(bar)
         root.addSubview(sep)
+        root.addSubview(handleBg)
         root.addSubview(scrollBg)
+        root.addSubview(edgeHandle) // on top for mouse events
         bar.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             bar.topAnchor.constraint(equalTo: root.topAnchor),
             bar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             bar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+
             sep.topAnchor.constraint(equalTo: bar.bottomAnchor),
             sep.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             sep.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+
+            // Handle strip: full height below separator
+            handleBg.topAnchor.constraint(equalTo: sep.bottomAnchor),
+            handleBg.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            handleBg.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            handleBg.widthAnchor.constraint(equalToConstant: Self.handleWidth),
+
+            edgeHandle.topAnchor.constraint(equalTo: sep.bottomAnchor),
+            edgeHandle.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+            edgeHandle.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            edgeHandle.widthAnchor.constraint(equalToConstant: Self.handleWidth),
+
+            // WebView area starts after the handle strip
             scrollBg.topAnchor.constraint(equalTo: sep.bottomAnchor),
             scrollBg.bottomAnchor.constraint(equalTo: root.bottomAnchor),
-            scrollBg.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            scrollBg.leadingAnchor.constraint(equalTo: handleBg.trailingAnchor),
             scrollBg.trailingAnchor.constraint(equalTo: root.trailingAnchor),
         ])
 
@@ -207,6 +222,10 @@ class PreviewPanel: NSPanel {
 
         setFrame(NSRect(x: sf.maxX, y: sf.minY, width: w, height: h), display: false)
         makeKeyAndOrderFront(nil)
+        // .accessory apps are never "active" by default, so NSCursor calls
+        // are ignored by WindowServer.  Explicitly activating makes cursor
+        // management work.  The .accessory policy still prevents a Dock icon.
+        NSApp.activate(ignoringOtherApps: true)
 
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.28
@@ -382,9 +401,6 @@ extension PreviewPanel: WKScriptMessageHandler {
             guard let urlString = message.body as? String,
                   let url = URL(string: urlString) else { return }
             routeURL(url)
-        case "resizeDrag":
-            guard let delta = message.body as? Double else { return }
-            resizeByDelta(CGFloat(delta))
         default:
             break
         }
@@ -404,6 +420,87 @@ extension PreviewPanel {
             NSWorkspace.shared.open(url)
         }
     }
+}
+
+// MARK: - ResizeEdgeView
+//
+// Full-height strip on the left edge of the panel.  The WKWebView frame does
+// not cover this strip, and the app is explicitly activated in showPanel(),
+// so NSCursor works normally here.
+
+private class ResizeEdgeView: NSView {
+    var onDrag: ((CGFloat) -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    override func mouseEntered(with event: NSEvent) { NSCursor.resizeLeftRight.push() }
+    override func mouseExited(with event: NSEvent)  { NSCursor.pop() }
+    override func mouseDown(with event: NSEvent)    { NSCursor.resizeLeftRight.set() }
+    override func mouseDragged(with event: NSEvent) { NSCursor.resizeLeftRight.set(); onDrag?(event.deltaX) }
+    override func mouseUp(with event: NSEvent)      { NSCursor.pop() }
+}
+
+// MARK: - DragGripView
+//
+// Small view in the title bar showing three dots as a resize affordance.
+
+private class DragGripView: NSView {
+    var onDrag: ((CGFloat) -> Void)?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+
+        let dotSize: CGFloat = 3
+        let gap: CGFloat = 4
+        let totalHeight = dotSize * 3 + gap * 2
+        let startY = (bounds.height - totalHeight) / 2
+        let x = (bounds.width - dotSize) / 2
+
+        ctx.setFillColor(NSColor.tertiaryLabelColor.cgColor)
+        for i in 0..<3 {
+            let y = startY + CGFloat(i) * (dotSize + gap)
+            ctx.fillEllipse(in: CGRect(x: x, y: y, width: dotSize, height: dotSize))
+        }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach { removeTrackingArea($0) }
+        addTrackingArea(NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        ))
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .resizeLeftRight)
+    }
+
+    override func mouseEntered(with event: NSEvent) { NSCursor.resizeLeftRight.push() }
+    override func mouseExited(with event: NSEvent)  { NSCursor.pop() }
+    override func mouseDown(with event: NSEvent)    { NSCursor.resizeLeftRight.set() }
+    override func mouseDragged(with event: NSEvent) { NSCursor.resizeLeftRight.set(); onDrag?(event.deltaX) }
+    override func mouseUp(with event: NSEvent)      { NSCursor.pop() }
 }
 
 // MARK: - Helpers
