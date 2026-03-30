@@ -3,6 +3,8 @@ import WebKit
 
 class PreviewPanel: NSPanel {
 
+    override var canBecomeKey: Bool { true }
+
     private var webView: WKWebView!
     private var titleBar: NSView!
     private var fileLabel: NSTextField!
