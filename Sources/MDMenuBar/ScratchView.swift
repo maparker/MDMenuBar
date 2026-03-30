@@ -171,6 +171,7 @@ class ScratchView: NSView {
         ])
 
         reload()
+        startWatching()
     }
 
     // MARK: - Focus
