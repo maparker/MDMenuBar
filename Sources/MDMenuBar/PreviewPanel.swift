@@ -418,7 +418,15 @@ class PreviewPanel: NSPanel {
             queue: .main
         )
         src.setEventHandler { [weak self] in
-            self?.reloadContent()
+            guard let self = self else { return }
+            self.reloadContent()
+            let event = src.data
+            // Atomic saves (VS Code, sed, mv) replace the file via rename.
+            // The old fd now points to the renamed-away file, so re-watch
+            // the path to pick up future changes to the new inode.
+            if event.contains(.rename) || event.contains(.delete) {
+                self.startWatching(path: path)
+            }
         }
         src.setCancelHandler {
             Darwin.close(fd)
@@ -514,14 +522,7 @@ extension PreviewPanel: WKScriptMessageHandler {
 
 extension PreviewPanel {
     private func routeURL(_ url: URL) {
-        if url.isFileURL {
-            let ext = url.pathExtension.lowercased()
-            if ext == "md" || ext == "markdown" {
-                NSWorkspace.shared.open(url)
-            }
-        } else {
-            NSWorkspace.shared.open(url)
-        }
+        NSWorkspace.shared.open(url)
     }
 }
 

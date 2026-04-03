@@ -486,7 +486,14 @@ class ScratchView: NSView {
 
         let src = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main)
-        src.setEventHandler { [weak self] in self?.reload() }
+        src.setEventHandler { [weak self] in
+            guard let self = self else { return }
+            self.reload()
+            let event = src.data
+            if event.contains(.rename) || event.contains(.delete) {
+                self.startWatching()
+            }
+        }
         src.setCancelHandler { Darwin.close(fd) }
         src.resume()
         watchSource = src
