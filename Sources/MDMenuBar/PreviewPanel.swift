@@ -388,8 +388,10 @@ class PreviewPanel: NSPanel {
             loadPlaceholder()
             return
         }
-        let html = MarkdownRenderer.render(content)
-        webView.loadHTMLString(html, baseURL: URL(fileURLWithPath: path).deletingLastPathComponent())
+        let baseURL = URL(fileURLWithPath: path).deletingLastPathComponent()
+        let ext = URL(fileURLWithPath: path).pathExtension.lowercased()
+        let html = (ext == "html" || ext == "htm") ? content : MarkdownRenderer.render(content)
+        webView.loadHTMLString(html, baseURL: baseURL)
     }
 
     private func loadPlaceholder() {
@@ -439,8 +441,8 @@ class PreviewPanel: NSPanel {
 
     @objc func openFile() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.init(filenameExtension: "md")!, .init(filenameExtension: "markdown")!, .plainText]
-        panel.title = "Choose a Markdown file"
+        panel.allowedContentTypes = [.init(filenameExtension: "md")!, .init(filenameExtension: "markdown")!, .init(filenameExtension: "html")!, .init(filenameExtension: "htm")!, .plainText]
+        panel.title = "Choose a Markdown or HTML file"
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
 
